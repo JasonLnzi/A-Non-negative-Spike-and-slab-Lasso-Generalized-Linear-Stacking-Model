@@ -10,7 +10,7 @@ library(glmnet)
 source("bmlasso.R")
 source("prepare.R")
 source("update.R")
-source("bmlasso1.R")
+source("nbmlasso.R")
 source("update1.R")
 
 
