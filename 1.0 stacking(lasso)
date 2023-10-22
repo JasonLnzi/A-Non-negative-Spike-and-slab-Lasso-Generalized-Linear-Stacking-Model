@@ -1,0 +1,647 @@
+
+rm(list=ls(all=TRUE))
+ls()
+
+library(cvAUC)
+library(pROC) 
+library(BhGLM)
+library(glmnet)
+
+source("bmlasso.R")
+source("prepare.R")
+source("update.R")
+source("bmlasso1.R")
+source("update1.R")
+
+
+############################### grouping 2  simple overlap  ###############################
+
+load("./Scenario1.Rdata")
+load("./Scenario2.Rdata")
+load("./Scenario3.Rdata")
+
+load("./Scenario4.Rdata")
+load("./Scenario5.Rdata")
+load("./Scenario6.Rdata")
+
+############################### grouping 2  simple overlap
+
+datalist = datalist1
+datalist = datalist2
+datalist = datalist3
+
+datalist = datalist4
+datalist = datalist5
+datalist = datalist6
+
+
+train_list = test_list = {}
+coefs = NULL
+n.sim = 100
+e = NULL
+iter = 1
+c = 1
+fold = 5   #5/10
+
+
+start.time <- Sys.time()
+###### run
+for (iter in 1:n.sim) {
+  
+  start.time1 <- Sys.time()
+  
+  x = datalist[[iter]][[1]]
+  x = as.matrix(x)
+  y = datalist[[iter]][[2]]
+  
+  
+  x1 = datalist[[iter]][[3]]
+  x1 = as.matrix(x1)
+  y1 = datalist[[iter]][[4]]
+  
+  
+  ############################# 0.grouping #############################
+  D <- data.frame(x, y)
+  
+  # Specify the number of folds for V-fold cross-validation
+  set.seed(123)
+  folds = fold
+  splt <- split(D, 1:folds)
+  #head(splt[[1]])[1:6, 1:6]
+  
+  datalist1 <- lapply(1:folds, function(ii) data = do.call(rbind, splt[-ii]))
+  datalist2 <- lapply(1:folds, function(ii) data = do.call(rbind, splt[ ii]))
+  
+  
+  ############################# 1.stacking #############################
+  ### 0 layer: five-fold CV
+  y0 = NULL
+  
+  # run
+  i = 1
+  for (i in 1:folds) {
+    
+    xx0 = datalist1[[i]][, -1001]
+    xx0 = as.matrix(xx0)
+    yy0 = datalist1[[i]][, 1001]
+    
+    xx1 = datalist2[[i]][, -1001]
+    xx1 = as.matrix(xx1)
+    yy1 = datalist2[[i]][, 1001] 
+    
+    yyy0 = NULL
+    auc = NULL
+    
+    # fit 20 models
+    j = 1
+    for (j in 1:length(usedgroup)) {
+     
+      xxx0 = xx0[, usedgroup[[j]]]
+      xxx1 = xx1[, usedgroup[[j]]]
+      
+      fL = glmnet(xxx0, yy0, family = "binomial")
+      cv.fL <- cv.glmnet(xxx0, yy0, family = "binomial")
+      response = predict(fL, xxx1, s = cv.fL$lambda.min, type = "response") 
+      colnames(response) = paste("M", j, sep = "")
+      yyy0 = cbind(yyy0, response)
+
+    }
+
+    y0 = rbind(y0, yyy0)
+    
+  }
+  
+  y_0 = y0
+  rownames(y_0) = substring(rownames(y_0), 3, length(rownames(y_0)))
+  y_0 = cbind(as.numeric(rownames(y_0)), y_0)
+  y_0 = y_0[order(y_0[,1]), ]
+  y_0 = y_0[, -1]
+  
+  data_train = cbind(y, y_0)
+  
+  train_list[[c]] = data_train
+
+
+  predictions1 = NULL
+  for (j in 1:length(usedgroup)) {
+    
+    fL = glmnet(x[, usedgroup[[j]]], y, family = "binomial")
+    cv.fL <- cv.glmnet(x[, usedgroup[[j]]], y, family = "binomial")
+    response = predict(fL, x1[, usedgroup[[j]]], s = cv.fL$lambda.min, type = "response")
+    
+    colnames(response) = paste("M", j, sep = "")
+    predictions1 <- cbind(predictions1, response)
+    
+  }
+  
+  data_test = cbind(y1, predictions1)
+  
+  test_list[[c]] = data_test
+  
+  
+  pre <- rep("\b", c)
+  cat(pre, c,  "/", 100, sep = "")
+  flush.console()
+  c = c + 1
+  
+  stop.time1 <- Sys.time()
+  minutes <- round(difftime(stop.time1, start.time1, units = "min"), 3)
+  cat("simulation time:", minutes, "minutes \n")
+  
+}  
+
+stop.time <- Sys.time()
+minutes <- round(difftime(stop.time, start.time, units = "min"), 3)
+cat("simulation time:", minutes, "minutes \n")
+
+
+save(train_list, test_list, file = "data_list1.0.Rdata")
+
+
+### 0.L-BFGS-B ###
+load("data_list1.0.Rdata")
+
+e0 = NULL
+c = 0
+d = 1
+
+start.time <- Sys.time()
+for (d in 1:100)   {
+  
+  data_train = train_list[d][[1]]
+  y_0 = data_train[, -1]
+  y.train = data_train[, 1]
+  
+  data_test = test_list[d][[1]]
+  predictions = data_test[, -1]
+  y.test = data_test[, 1]
+  
+  #1. L-BFGS-B
+  X <- cbind(y.train, y_0)
+  X = as.data.frame(X)
+  
+  bounds = c(0, Inf)
+  init = (rep(1/20, 20))
+  SL.r <- function(A, y, par){
+    A <- as.matrix(A)
+    predictions <- crossprod(t(A), par) # linear combination
+    cvRisk <- 1 - AUC(predictions = predictions, labels = y)
+  }
+  
+  fit <- optim(par = init, fn = SL.r, A = X[, -1], y = X[, 1],
+               method = "L-BFGS-B", lower = bounds[1], upper = bounds[2])
+  
+  alpha0 = fit$par
+  alpha <- alpha0/sum(alpha0)
+  
+  y_pred <- predictions%*%alpha
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e0 = rbind(e0, mearsure)
+  
+  
+  c = c + 1
+  pre <- rep("\b", c)
+  cat(pre, c,  "/", 100, sep = "")
+  flush.console()
+  
+}
+
+stop.time <- Sys.time()
+minutes <- round(difftime(stop.time, start.time, units = "min"), 3)
+cat("simulation time:", minutes, "minutes \n")
+
+apply(e0, 2, mean)
+apply(e0, 2, sd)
+
+
+### 1.lasso ###
+e = NULL
+d = 1
+
+for (d in 1:100)   {
+  
+  data_train = train_list[d][[1]]
+  y_0 = data_train[, -1]
+  y.train = data_train[, 1]
+  
+  data_test = test_list[d][[1]]
+  predictions = data_test[, -1]
+  y.test = data_test[, 1]
+  
+  
+  ### 1 layer
+  fL = glmnet(y_0, y.train, family = "binomial", lower.limits = 0, intercept = T, standardize = T)
+  cv.fL <- cv.glmnet(y_0, y.train, family = "binomial", lower.limits = 0, intercept = T, standardize = T)
+  W <- as.matrix(coef(cv.fL, s = "lambda.min")[])
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  e = rbind(e, mearsure)
+  
+}
+
+apply(e, 2, median)
+apply(e, 2, quantile)
+apply(e, 2, mean)
+apply(e, 2, sd)
+  
+
+### 2.sslasso ###
+e1 = e2 = e3 = e4 = e5 = e6 = e7 = e8 = e9 = e10 = NULL
+
+d = 1
+
+for (d in 1:100)   {
+  
+  data_train = train_list[d][[1]]
+  y_0 = data_train[, -1]
+  y.train = data_train[, 1]
+  
+  data_test = test_list[d][[1]]
+  predictions = data_test[, -1]
+  y.test = data_test[, 1]
+  
+  
+  ### 1 layer
+  ss = c(0.01, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e1 = rbind(e1, mearsure)
+  
+  
+  ss = c(0.02, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e2 = rbind(e2, mearsure)
+  
+  
+  ss = c(0.03, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e3 = rbind(e3, mearsure)
+  
+  
+  ss = c(0.04, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e4 = rbind(e4, mearsure)
+  
+  
+  ss = c(0.05, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e5 = rbind(e5, mearsure)
+  
+  
+  ss = c(0.06, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e6 = rbind(e6, mearsure)
+  
+  
+  ss = c(0.07, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e7 = rbind(e7, mearsure)
+  
+  
+  ss = c(0.08, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e8 = rbind(e8, mearsure)
+  
+  
+  ss = c(0.09, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  #coefs = cbind(coefs, f5[["coefficients"]])
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e9 = rbind(e9, mearsure)
+  
+  
+  ss = c(0.10, 1)
+  f5 = bmlasso1(y_0, y.train, family = "binomial", ss = ss, group = 1)
+  W <- f5[["coefficients"]]
+  
+  predictions1 = cbind(1, predictions)
+  y_pred <- predictions1%*%W
+  y_pred = 1/(1+exp(-y_pred))
+  
+  p <- data.frame(y.test, y_pred)
+  colnames(p) = c("y.test", "y_pred")
+  head(p)
+  
+  L <- dbinom(y.test, size=1, prob=y_pred, log=FALSE)
+  L <- ifelse(L == 0, 1e-04, L)
+  logL <- log(L)
+  logL <- sum(logL, na.rm=TRUE)
+  deviance <- -2 * logL
+  
+  roc = roc(p, y.test, y_pred)
+  auc = auc(roc)
+  misclassification <- mean(abs(y.test - y_pred) >= 0.5, na.rm = TRUE)
+  mse <- mean((y.test - y_pred)^2, na.rm = TRUE)
+  
+  mearsure = NULL
+  mearsure = cbind(mearsure, deviance)
+  mearsure = cbind(mearsure, auc)
+  mearsure = cbind(mearsure, mse)
+  mearsure = cbind(mearsure, misclassification)
+  
+  e10 = rbind(e10, mearsure)
+  
+}
+
+
+d1 = rbind(
+  apply(e1,2,mean), apply(e2,2,mean), apply(e3,2,mean), 
+  apply(e4,2,mean), apply(e5,2,mean), apply(e6,2,mean),
+  apply(e7,2,mean), apply(e8,2,mean), apply(e9,2,mean), apply(e10,2,mean))
+d1  
+
+
+d2 = rbind(apply(e0,2,mean), apply(e,2,mean), apply(e6,2,mean))
+d3 = cbind(c("L-BFGS", "Lasso", "sslasso"), round(d2, digits = 3))
+d3
+
+d4 = rbind(apply(e0,2,sd), apply(e,2,sd), apply(e6,2,sd))
+sd = cbind(c("L-BFGS", "Lasso", "sslasso"), round(d4, digits = 3))
+sd
+
+
+save.image("Scenario1_result(stacking).Rdata")
