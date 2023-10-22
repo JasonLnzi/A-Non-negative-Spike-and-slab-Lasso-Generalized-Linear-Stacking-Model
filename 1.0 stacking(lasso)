@@ -234,7 +234,7 @@ apply(e0, 2, mean)
 apply(e0, 2, sd)
 
 
-### 1.lasso ###
+### 1.nlasso ###
 e = NULL
 d = 1
 
@@ -288,7 +288,7 @@ apply(e, 2, mean)
 apply(e, 2, sd)
   
 
-### 2.sslasso ###
+### 2.nsslasso ###
 e1 = e2 = e3 = e4 = e5 = e6 = e7 = e8 = e9 = e10 = NULL
 
 d = 1
