@@ -1,0 +1,302 @@
+
+rm(list=ls(all=TRUE))
+ls()
+
+###### start ######
+n = 500    
+m = 1000   
+pathway.n = 20
+
+qtl = c(5, 20, 40, 210, 220, 240, 975, 995); length(qtl)
+pos = seq(0, m, by = m/pathway.n); pos; length(pos)
+
+varnames = c(paste("x", c(1:m), sep=""))
+qtlnames = c(paste("x", qtl, sep="")); qtlnames
+
+
+# for Scenario1-3
+cc = c(0.80, -0.70, 1.00, -0.9, -0.80, 0.90, -1.00, 0.70)
+names(cc) = qtlnames
+c01 = rep(0, m); names(c01) = varnames 
+c01[names(cc)] = cc
+
+coefs <- c(cc, rep(0, m - length(cc)))
+
+# for Scenario4-6
+cc = c(0.80, -0.30, 1.40, -0.9, -0.80, 0.90, -1.50, 0.20)
+names(cc) = qtlnames
+c02 = rep(0, m); names(c02) = varnames 
+c02[names(cc)] = cc
+
+coefs <- c(cc, rep(0, m - length(cc)))
+
+# save(c01, c02, file = "coefs.Rdata")
+
+
+##########    setting 2: over-lapping
+# load("./group.Rdata")
+
+# pathway1 = x5,x20,x40, + x210,x220
+# pathway5 = x210, x220,x240, + x40
+# pathway10 = x975, x995, + x210, x220
+group2[["pathway1"]] = c("x210", "x220", group2[["pathway1"]]);   group2[["pathway1"]];    ## add "x210","x220"  to this group
+group2[["pathway5"]] = c("x40", group2[["pathway5"]]);            group2[["pathway5"]];    ## add "x40"  to this group
+group2[["pathway20"]] = c("x210", "x220", group2[["pathway20"]]); group2[["pathway20"]];   ## add "x210","x220"  to this group
+
+# save(group2, file = "group.Rdata")
+
+###### simu ######
+#####
+usedgroup = group2
+ro = 0.6   
+
+###0. Pseudo R_square
+x = sim.x(n = 20000, m = m, group = usedgroup, corr = ro)
+#save.image(file = "Pseudo R_square.Rdata")
+
+#load(file = "Pseudo R_square.Rdata")
+
+X <- as.matrix(x)
+#cor.x = cor(X)
+var.x = var(X) 
+var.eta = t(coefs) %*% var.x %*% coefs
+var.eta
+
+# for Scenario1-3
+sigma = 1.6 #1.6 2.6 4.5
+
+# for S4-6
+sigma = 5.5 #1.8 3.1 5.5
+
+
+pheno = sim.y(x = x[qtlnames], coefs = cc, sigma = sigma) 
+y = pheno$y.ordinal
+
+#1
+library(rms)
+library(rsq)
+
+data = cbind(y, x)
+lrm.full <- lrm(y ~ .,  data = data,  x = TRUE, y = TRUE)
+lrm.full$stats[10:14]  #R2(1000,20000)
+
+glm.full <- glm(y ~ .,  data = data,  x = TRUE, y = TRUE)
+rsq(glm.full, adj = T)
+
+#2
+SNR = var.eta/sigma^2
+R_square = SNR/(1+SNR)
+R_square 
+
+
+
+###1. R_square
+x = sim.x(n = n, m = m, group = usedgroup, corr = ro)
+X <- as.matrix(x)
+#cor.x = cor(X)
+var.x = var(X) 
+var.eta = t(coefs) %*% var.x %*% coefs #4.436 3.022 1.197
+var.eta  #2.5 3
+
+# 1.R_square
+R_square = 0.50   #0.1, 0.25, 0.50
+SNR = R_square/(1-R_square)  #0.333, 1, 3
+sigma_square = var.eta/SNR # = 2.6^2
+sigma = sqrt(sigma_square)
+sigma
+
+# 2.sigma
+sigma = 1.6  #4.5, 2.6, 1.6 #5.5, 3.1, 1.8
+SNR = var.eta/sigma^2
+R_square = SNR/(1+SNR)
+R_square #0.5
+
+
+#############################################
+###################simulate data#############################
+#############################################
+
+############################### grouping 2  simple overlap 
+## for group setting 1
+n.sim = 100
+datalist1 = list()
+usedgroup = group2
+ro = 0.6  #cc = c(0.80, -0.70, 1.00, -0.9, -0.80, 0.90, -1.00, 0.70)
+sigma = 1.6  #R_square = 0.50
+
+set.seed(123)
+for (i in 1:n.sim) {
+  
+  x = sim.x(n = n, m = m, group = usedgroup , corr = ro) 
+  pheno = sim.y(x = x[qtlnames], coefs = cc, sigma = sigma) 
+  y = pheno$y.ordinal
+  
+  x1 = sim.x(n = n, m = m, group = usedgroup , corr = ro)  
+  pheno = sim.y(x = x1[qtlnames], coefs = cc, sigma = sigma) 
+  y1 = pheno$y.ordinal 
+  
+  datalist1[[i]]=list(x, y, x1, y1)
+  
+  ## grouping 2    
+  pre <- rep("\b", n.sim + 1)
+  cat(pre, i, "/", n.sim, sep = "")
+  flush.console()
+  
+}  
+
+save(datalist1, usedgroup, file = ".\\Scenario1.Rdata")
+
+
+############################### grouping 2  simple overlap 
+## for group setting 2
+n.sim = 100
+datalist2 = list()
+usedgroup = group2
+ro = 0.6  #cc = c(0.80, -0.70, 1.00, -0.9, -0.80, 0.90, -1.00, 0.70)
+sigma = 2.6  #R_square = 0.25
+
+set.seed(123)
+for (i in 1:n.sim) {
+  
+  x = sim.x(n = n, m = m, group = usedgroup , corr = ro) 
+  pheno = sim.y(x = x[qtlnames], coefs = cc, sigma = sigma) 
+  y = pheno$y.ordinal
+  
+  x1 = sim.x(n = n, m = m, group = usedgroup , corr = ro)  
+  pheno = sim.y(x = x1[qtlnames], coefs = cc, sigma = sigma) 
+  y1 = pheno$y.ordinal 
+  
+  datalist2[[i]]=list(x, y, x1, y1)
+  
+  ## grouping 2    
+  pre <- rep("\b", n.sim + 1)
+  cat(pre, i, "/", n.sim, sep = "")
+  flush.console()
+  
+}  
+
+save(datalist2, usedgroup, file = ".\\Scenario2.Rdata")
+
+
+############################### grouping 2  simple overlap 
+## for group setting 3
+n.sim = 100
+datalist3 = list()
+usedgroup = group2
+ro = 0.6  #cc = c(0.80, -0.70, 1.00, -0.9, -0.80, 0.90, -1.00, 0.70)
+sigma = 4.5  #R_square = 0.1
+
+set.seed(123)
+for (i in 1:n.sim) {
+  
+  x = sim.x(n = n, m = m, group = usedgroup , corr = ro) 
+  pheno = sim.y(x = x[qtlnames], coefs = cc, sigma = sigma) 
+  y = pheno$y.ordinal
+  
+  x1 = sim.x(n = n, m = m, group = usedgroup , corr = ro)  
+  pheno = sim.y(x = x1[qtlnames], coefs = cc, sigma = sigma) 
+  y1 = pheno$y.ordinal 
+  
+  datalist3[[i]]=list(x, y, x1, y1)
+  
+  ## grouping 2    
+  pre <- rep("\b", n.sim + 1)
+  cat(pre, i, "/", n.sim, sep = "")
+  flush.console()
+  
+}  
+
+save(datalist3, usedgroup, file = ".\\Scenario3.Rdata")
+
+
+############################### grouping 2  simple overlap 
+## for group setting 4
+n.sim = 100
+datalist4 = list()
+usedgroup = group2
+ro = 0.6   #cc = c(0.80, -0.30, 1.40, -0.9, -0.80, 0.90, -1.50, 0.20)
+sigma = 1.8  #R_square = 0.5
+
+set.seed(123)
+for (i in 1:n.sim) {
+  
+  x = sim.x(n = n, m = m, group = usedgroup , corr = ro) 
+  pheno = sim.y(x = x[qtlnames], coefs = cc, sigma = sigma) 
+  y = pheno$y.ordinal
+  
+  x1 = sim.x(n = n, m = m, group = usedgroup , corr = ro)  
+  pheno = sim.y(x = x1[qtlnames], coefs = cc, sigma = sigma) 
+  y1 = pheno$y.ordinal 
+  
+  datalist4[[i]]=list(x, y, x1, y1)
+  
+  ## grouping 2    
+  pre <- rep("\b", n.sim + 1)
+  cat(pre, i, "/", n.sim, sep = "")
+  flush.console()
+  
+}  
+
+save(datalist4, usedgroup, file = ".\\Scenario4.Rdata")
+
+
+############################### grouping 2  simple overlap 
+## for group setting 5
+n.sim = 100
+datalist5 = list()
+usedgroup = group2
+ro = 0.6   #cc = c(0.80, -0.30, 1.40, -0.9, -0.80, 0.90, -1.50, 0.20)
+sigma = 3.1  #R_square = 0.25
+
+set.seed(123)
+for (i in 1:n.sim) {
+  
+  x = sim.x(n = n, m = m, group = usedgroup , corr = ro) 
+  pheno = sim.y(x = x[qtlnames], coefs = cc, sigma = sigma) 
+  y = pheno$y.ordinal
+  
+  x1 = sim.x(n = n, m = m, group = usedgroup , corr = ro)  
+  pheno = sim.y(x = x1[qtlnames], coefs = cc, sigma = sigma) 
+  y1 = pheno$y.ordinal 
+  
+  datalist5[[i]]=list(x, y, x1, y1)
+  
+  ## grouping 2    
+  pre <- rep("\b", n.sim + 1)
+  cat(pre, i, "/", n.sim, sep = "")
+  flush.console()
+  
+}  
+
+save(datalist5, usedgroup, file = ".\\Scenario5.Rdata")
+
+
+############################### grouping 2  simple overlap 
+## for group setting 6
+n.sim = 100
+datalist6 = list()
+usedgroup = group2
+ro = 0.6   #cc = c(0.80, -0.30, 1.40, -0.9, -0.80, 0.90, -1.50, 0.20)
+sigma = 5.5  #R_square = 0.25
+
+set.seed(123)
+for (i in 1:n.sim) {
+  
+  x = sim.x(n = n, m = m, group = usedgroup , corr = ro) 
+  pheno = sim.y(x = x[qtlnames], coefs = cc, sigma = sigma) 
+  y = pheno$y.ordinal
+  
+  x1 = sim.x(n = n, m = m, group = usedgroup , corr = ro)  
+  pheno = sim.y(x = x1[qtlnames], coefs = cc, sigma = sigma) 
+  y1 = pheno$y.ordinal 
+  
+  datalist6[[i]]=list(x, y, x1, y1)
+  
+  ## grouping 2    
+  pre <- rep("\b", n.sim + 1)
+  cat(pre, i, "/", n.sim, sep = "")
+  flush.console()
+  
+}  
+
+save(datalist6, usedgroup, file = ".\\Scenario6.Rdata")
